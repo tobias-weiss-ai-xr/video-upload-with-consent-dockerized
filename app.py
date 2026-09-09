@@ -9,6 +9,7 @@ from markupsafe import escape
 from werkzeug.utils import secure_filename
 
 ALLOWED = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".mpeg", ".wmv"}
+ALLOWED_CONSENT = {".pdf", ".jpg", ".jpeg", ".png", ".webp", ".heic"}
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
 MAX_MB = int(os.environ.get("MAX_MB", "500"))
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -47,6 +48,8 @@ __ERROR__
   <input type="email" id="email" name="email" required maxlength="200">
   <label for="video">Video (mp4, mov, avi, mkv, webm …, max. __MAX_MB__ MB)</label>
   <input type="file" id="video" name="video" accept="video/*,.mp4,.mov,.avi,.mkv,.webm,.m4v,.mpg,.mpeg,.wmv" required>
+  <label for="consent_file">Einwilligungserklärung – unterschrieben (PDF, JPG, PNG, WEBP oder HEIC)</label>
+  <input type="file" id="consent_file" name="consent_file" accept=".pdf,.jpg,.jpeg,.png,.webp,.heic" required>
   <label style="font-weight:400;margin-top:1rem">
     <input type="checkbox" name="consent" required>
     Ich habe die <a href="/datenschutz" target="_blank">Datenschutzerklärung</a> gelesen
@@ -84,6 +87,7 @@ def upload():
     name = (request.form.get("name") or "").strip()
     email = (request.form.get("email") or "").strip()
     file = request.files.get("video")
+    doc = request.files.get("consent_file")
     if not name or len(name) > 200:
         return _form("Bitte geben Sie Ihren Namen an."), 400
     if not EMAIL_RE.match(email):
@@ -92,6 +96,11 @@ def upload():
         return _form("Bitte bestätigen Sie die Datenschutzerklärung."), 400
     if not file or not file.filename:
         return _form("Bitte wählen Sie eine Videodatei aus."), 400
+    if not doc or not doc.filename:
+        return _form("Bitte laden Sie die unterschriebene Einwilligungserklärung hoch."), 400
+    doc_ext = os.path.splitext(secure_filename(doc.filename))[1].lower()
+    if doc_ext not in ALLOWED_CONSENT:
+        return _form("Ungültiges Format für die Einwilligungserklärung. Erlaubt: " + ", ".join(sorted(ALLOWED_CONSENT))), 400
     ext = os.path.splitext(secure_filename(file.filename))[1].lower()
     if ext not in ALLOWED:
         return _form("Ungültiges Dateiformat. Erlaubt: " + ", ".join(sorted(ALLOWED))), 400
@@ -100,12 +109,15 @@ def upload():
     ts = time.strftime("%Y%m%d-%H%M%S")
     saved = f"{ts}_{secure_filename(file.filename)}"
     file.save(os.path.join(DATA_DIR, saved))
+    doc_saved = f"{ts}_einwilligung_{secure_filename(doc.filename)}"
+    doc.save(os.path.join(DATA_DIR, doc_saved))
     with open(os.path.join(DATA_DIR, "meta.jsonl"), "a", encoding="utf-8") as f:
         f.write(json.dumps({
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
             "name": name,
             "email": email,
             "file": saved,
+            "consent_file": doc_saved,
             "size": request.content_length or 0,
         }, ensure_ascii=False) + "\n")
     return redirect("/danke")
