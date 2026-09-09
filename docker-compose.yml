@@ -1,0 +1,10 @@
+services:
+  upload:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      - MAX_MB=500
+    restart: unless-stopped
