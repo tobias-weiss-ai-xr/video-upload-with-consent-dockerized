@@ -4,7 +4,11 @@ import os
 import tempfile
 
 os.environ["DATA_DIR"] = tempfile.mkdtemp()
+os.environ["RATE_LIMIT"] = "10000/hour"  # Tests nicht drosseln
 import app as app_module
+
+# Kein clamd in der Testumgebung: Scanner stubben (True = sauber)
+app_module.scan_clean = lambda p: True
 
 client = app_module.app.test_client()
 DATA = app_module.DATA_DIR
@@ -53,12 +57,30 @@ assert r.status_code == 400
 r = post({"email": "not-an-email"})
 assert r.status_code == 400
 
-# 8. Oversize rejected (set tiny cap)
+# 8. Infected video rejected and both files deleted
+app_module.scan_clean = lambda p: False
+before = set(os.listdir(DATA))
+r = post()
+assert r.status_code == 400 and b"infiziert" in r.data
+assert set(os.listdir(DATA)) == before, "infizierte Dateien nicht gelöscht"
+
+# 9. Scanner outage rejected (fail closed) and files deleted
+app_module.scan_clean = None
+before = set(os.listdir(DATA))
+r = post()
+assert r.status_code == 503 and b"Virenscanner" in r.data
+assert set(os.listdir(DATA)) == before, "Dateien bei Scanner-Ausfall nicht gelöscht"
+app_module.scan_clean = lambda p: True
+
+# 10. Oversize rejected (set tiny cap)
 app_module.app.config["MAX_CONTENT_LENGTH"] = 10
 r = post(content=b"0" * 100)
 assert r.status_code == 413
 
-# 9. Privacy page renders
-assert client.get("/datenschutz").status_code == 200
+# 11. Privacy page renders + security headers present
+r = client.get("/datenschutz")
+assert r.status_code == 200
+assert r.headers.get("X-Content-Type-Options") == "nosniff"
+assert "default-src 'self'" in r.headers.get("Content-Security-Policy", "")
 
 print("all checks passed")

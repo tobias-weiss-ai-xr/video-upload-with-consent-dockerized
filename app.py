@@ -2,9 +2,14 @@
 import json
 import os
 import re
+import sys
 import time
+import uuid
 
+import clamd
 from flask import Flask, request, redirect
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from markupsafe import escape
 from werkzeug.utils import secure_filename
 
@@ -26,6 +31,29 @@ weitergegeben und nach Abschluss der Bearbeitung gelöscht.</p>
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_MB * 1024 * 1024
+
+limiter = Limiter(get_remote_address, app=app, storage_uri="memory://")
+# ponytail: memory:// ist pro Gunicorn-Worker; bei --workers > 1 Redis als storage_uri
+RATE_LIMIT = os.environ.get("RATE_LIMIT", "20/hour;200/day")
+
+clam = clamd.ClamdNetworkSocket(host=os.environ.get("CLAMD_HOST", "clamd"), port=3310, timeout=300)
+
+
+def scan_clean(path):
+    """True = sauber, False = infiziert. Wirft clamd.ConnectionError, wenn
+    der Scanner nicht erreichbar ist -> Upload wird abgelehnt (fail closed)."""
+    with open(path, "rb") as f:
+        status, _sig = clam.instream(f)["stream"]
+    return status == "OK"
+
+
+@app.after_request
+def security_headers(resp):
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["X-Frame-Options"] = "DENY"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["Content-Security-Policy"] = "default-src 'self'; style-src 'unsafe-inline'; form-action 'self'"
+    return resp
 
 PAGE = """<!doctype html>
 <html lang="de"><head><meta charset="utf-8">
@@ -83,6 +111,7 @@ def datenschutz():
 
 
 @app.post("/upload")
+@limiter.limit(RATE_LIMIT)
 def upload():
     name = (request.form.get("name") or "").strip()
     email = (request.form.get("email") or "").strip()
@@ -107,10 +136,24 @@ def upload():
 
     os.makedirs(DATA_DIR, exist_ok=True)
     ts = time.strftime("%Y%m%d-%H%M%S")
-    saved = f"{ts}_{secure_filename(file.filename)}"
-    file.save(os.path.join(DATA_DIR, saved))
-    doc_saved = f"{ts}_einwilligung_{secure_filename(doc.filename)}"
-    doc.save(os.path.join(DATA_DIR, doc_saved))
+    # uuid-Suffix: verhindert Kollisionen/Überschreiben bei Mehrfach-Uploads derselben Sekunde
+    saved = f"{ts}_{uuid.uuid4().hex[:8]}_{secure_filename(file.filename)}"
+    video_path = os.path.join(DATA_DIR, saved)
+    doc_saved = f"{ts}_{uuid.uuid4().hex[:8]}_einwilligung_{secure_filename(doc.filename)}"
+    doc_path = os.path.join(DATA_DIR, doc_saved)
+    file.save(video_path)
+    doc.save(doc_path)
+    try:
+        clean = scan_clean(video_path) and scan_clean(doc_path)
+    except Exception:
+        os.unlink(video_path)
+        os.unlink(doc_path)
+        print("ClamAV nicht erreichbar – Upload abgelehnt (fail closed).", file=sys.stderr)
+        return _form("Der Virenscanner ist derzeit nicht verfügbar. Bitte später erneut versuchen."), 503
+    if not clean:
+        os.unlink(video_path)
+        os.unlink(doc_path)
+        return _form("Die hochgeladene Datei wurde als infiziert abgewiesen."), 400
     with open(os.path.join(DATA_DIR, "meta.jsonl"), "a", encoding="utf-8") as f:
         f.write(json.dumps({
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -131,6 +174,11 @@ def danke():
 @app.errorhandler(413)
 def too_large(_e):
     return _form(f"Datei zu groß (max. {MAX_MB} MB)."), 413
+
+
+@app.errorhandler(429)
+def rate_limited(_e):
+    return _form("Zu viele Upload-Versuche. Bitte versuchen Sie es später erneut."), 429
 
 
 if __name__ == "__main__":
