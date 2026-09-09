@@ -10,6 +10,7 @@ Upload-Formular: Video + unterschriebene Einwilligungserklärung (PDF/Foto) + Na
 - **Vor dem Go-Live:** echte Datenschutzerklärung in `app.py` → `PRIVACY_HTML` einsetzen.
 - HTTPS vor den Container stellen (Reverse Proxy), Port 8000 nicht direkt ins Internet.
 - Test: `pip install flask flask-limiter clamd && python3 test_app.py`
+- Lizenz: [Apache-2.0](LICENSE)
 
 ## Sicherheit
 
