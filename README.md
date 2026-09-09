@@ -1,4 +1,4 @@
-# Video-Upload (dockerized)
+# Video Upload with Consent (dockerized)
 
 ![Teaser](teaser.png)
 
