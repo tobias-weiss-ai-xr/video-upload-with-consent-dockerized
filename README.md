@@ -1,5 +1,7 @@
 # Video-Upload (dockerized)
 
+![Teaser](teaser.png)
+
 Upload-Formular: Video + unterschriebene Einwilligungserklärung (PDF/Foto) + Name + E-Mail.
 
 - Start: `docker compose up -d --build` → http://localhost:8000
